@@ -33,6 +33,14 @@ export const ALLOWED_LOCATIONS = [
     latitude: 10.513861,
     longitude: 122.849917,
     radiusMeters: 2000 // 2km radius
+  },
+  {
+    id: 'lccb',
+    name: 'LCCB',
+    badge: 'LCCB Zone',
+    latitude: 10.670640,
+    longitude: 122.947815,
+    radiusMeters: 2000 // 2km radius
   }
 ];
 
