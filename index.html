@@ -34,7 +34,7 @@
   <canvas id="ar-canvas"></canvas>
 
   <!-- ── Geolocation Gate (Exclusive to The NGC within 500m) ── -->
-  <div id="location-gate" class="screen screen--location">
+  <div id="location-gate" class="screen screen--location hidden">
     <!-- Top Bacolod Mosaic Ribbon -->
     <div class="tribal-ribbon tribal-ribbon--top" aria-hidden="true"></div>
 
@@ -294,7 +294,7 @@
           <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
           <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
         </svg>
-        <span id="toast-text">Point at the floor to detect flat surface, then tap anywhere on the grid to place</span>
+        <span id="toast-text">Loading object in 5s...</span>
       </div>
 
       <!-- AR Surface Scanning Reticle Indicator -->
@@ -347,12 +347,10 @@
             </p>
             <div class="tribal-feature-grid">
               <div class="tribal-card card--sun">
-                <span class="card-icon">👑</span>
                 <strong>Headdress & Feathers</strong>
                 <span>Radiant crowns symbolizing soaring hope and artistic pride.</span>
               </div>
               <div class="tribal-card card--smile">
-                <span class="card-icon">🎭</span>
                 <strong>The Smiling Mask</strong>
                 <span>Bacolod's iconic declaration of warmth and enduring positivity.</span>
               </div>
@@ -368,7 +366,6 @@
       <!-- Bottom dock (Info pill button) -->
       <div class="dock">
         <button id="info-toggle-btn" class="btn btn--info info-pill hidden">
-          <span class="btn-festival-sparkle">🎭</span>
           <span>About MassKara Festival</span>
           <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
             stroke-linecap="round" stroke-linejoin="round">

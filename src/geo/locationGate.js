@@ -472,8 +472,7 @@ export function startRealtimeLocationTracking() {
 }
 
 export function isGeofenceEnabled() {
-  const stored = localStorage.getItem('geofence_enabled');
-  return stored === null ? true : stored === 'true';
+  return false;
 }
 
 export function syncGeofenceToggleUI(enabled) {

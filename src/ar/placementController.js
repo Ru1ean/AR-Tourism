@@ -3,6 +3,7 @@ import { arState } from './state.js';
 import { dom } from '../ui/domElements.js';
 import { setToast } from '../ui/toast.js';
 import { resetDetectedPlaneGrids } from './planeDetector.js';
+import { PLACEMENT_DISTANCE, AUTO_LOAD_TIMER_SECONDS } from '../config/constants.js';
 import {
   resumeAudioContext,
   stopPositionalAudio,
@@ -11,11 +12,25 @@ import {
 import { applyOrientationClasses, getEffectiveOrientation, updateUILayout } from '../ui/orientationController.js';
 
 let uiControlsRevealTimeout = null;
+let countdownInterval = null;
+let startDelayTimeout = null;
 
 export function clearUiControlsRevealTimeout() {
   if (uiControlsRevealTimeout) {
     clearTimeout(uiControlsRevealTimeout);
     uiControlsRevealTimeout = null;
+  }
+}
+
+export function clearVideoStartDelay() {
+  arState.isVideoCountdownActive = false;
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+    countdownInterval = null;
+  }
+  if (startDelayTimeout) {
+    clearTimeout(startDelayTimeout);
+    startDelayTimeout = null;
   }
 }
 
@@ -147,13 +162,8 @@ export function resetArSessionState() {
 }
 
 export function enablePlacementListener() {
-  if (!arState.arStarted || arState.isPlaced) return;
-  const canvas = dom.arCanvas;
-  if (arState.placementListenerAttached || typeof arState.handlePlacementTap !== 'function') return;
-  if (canvas) canvas.addEventListener('pointerdown', arState.handlePlacementTap);
-  window.addEventListener('pointerdown', arState.handlePlacementTap);
-  window.addEventListener('touchend', arState.handlePlacementTap);
-  arState.placementListenerAttached = true;
+  // Tap-to-drop feature removed: no listener attached
+  arState.placementListenerAttached = false;
 }
 
 export function disablePlacementListener() {
@@ -176,237 +186,152 @@ export function updateTapCoordinates(clientX, clientY) {
 }
 
 export function onSelect() {
-  if (!arState.arStarted || arState.isPlaced) return;
-  if (performance.now() < arState.ignorePlacementUntil) return;
-  handleFloorTap(arState.lastTapScreenX, arState.lastTapScreenY);
+  // Tap-to-drop feature removed: no-op
 }
 
 export function handleFloorTap(screenX = null, screenY = null) {
-  if (!arState.arStarted || arState.isPlaced) return;
-  if (performance.now() < arState.ignorePlacementUntil) return;
-  if (arState.isFallbackMode && !arState.isSurfaceDetected) {
-    setToast('Please scan the floor first to detect a flat surface');
-    return;
-  }
-
-  const targetPoint = new THREE.Vector3();
-  let foundIntersection = false;
-
-  const renderer = arState.renderer;
-  const camera = arState.camera;
-
-  const xrCam = (renderer && renderer.xr && renderer.xr.isPresenting)
-    ? renderer.xr.getCamera()
-    : camera;
-  const activeCam = (xrCam && xrCam.cameras && xrCam.cameras.length > 0)
-    ? xrCam.cameras[0]
-    : camera;
-
-  if (!activeCam) return;
-  activeCam.updateMatrixWorld(true);
-
-  const raycaster = new THREE.Raycaster();
-
-  const tapX = (typeof screenX === 'number' && screenX > 0)
-    ? screenX
-    : (typeof arState.lastTapScreenX === 'number' && arState.lastTapScreenX > 0 ? arState.lastTapScreenX : window.innerWidth / 2);
-  const tapY = (typeof screenY === 'number' && screenY > 0)
-    ? screenY
-    : (typeof arState.lastTapScreenY === 'number' && arState.lastTapScreenY > 0 ? arState.lastTapScreenY : window.innerHeight / 2);
-
-  const mouse = new THREE.Vector2(
-    (tapX / window.innerWidth) * 2 - 1,
-    -(tapY / window.innerHeight) * 2 + 1
-  );
-
-  raycaster.setFromCamera(mouse, activeCam);
-
-  // 1. Test intersection with detected floor grid meshes
-  if (arState.floorGridMesh && arState.floorGridMesh.children.length > 0) {
-    const planeMeshes = [];
-    arState.floorGridMesh.traverse((child) => {
-      if (child.isMesh && child.visible) planeMeshes.push(child);
-    });
-
-    if (planeMeshes.length > 0) {
-      const intersects = raycaster.intersectObjects(planeMeshes, true);
-      if (intersects.length > 0) {
-        targetPoint.copy(intersects[0].point);
-        foundIntersection = true;
-      }
-    }
-  }
-
-  // 2. If fallback grid is active on detected surface, ensure tap is inside grid bounds
-  if (!foundIntersection && arState.fallbackFloorGridMesh && arState.fallbackFloorGridMesh.visible && arState.detectedFloorHeight !== null) {
-    const floorY = arState.detectedFloorHeight;
-    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -floorY);
-    const hitIntersection = new THREE.Vector3();
-    if (raycaster.ray.intersectPlane(groundPlane, hitIntersection)) {
-      const distFromGridCenter = hitIntersection.distanceTo(arState.fallbackFloorGridMesh.position);
-      if (distFromGridCenter <= 4.5) {
-        targetPoint.copy(hitIntersection);
-        targetPoint.y = floorY;
-        foundIntersection = true;
-      }
-    }
-  }
-
-  if (!foundIntersection && arState.isFallbackMode) {
-    const gridPos = arState.fallbackFloorGridMesh?.position;
-    if (gridPos) {
-      targetPoint.set(gridPos.x, arState.detectedFloorHeight || -1.3, gridPos.z);
-      foundIntersection = true;
-    }
-  }
-
-  if (!foundIntersection && arState.floorGridMesh?.visible && arState.lastHitPosition && arState.lastHitPosition.lengthSq() > 0) {
-    targetPoint.copy(arState.lastHitPosition);
-    foundIntersection = true;
-  }
-
-  if (foundIntersection && arState.dancerGroup) {
-    const dancerVideo = arState.dancerVideo || document.getElementById('dancer-video');
-    if (dancerVideo && dancerVideo.paused) {
-      dancerVideo.play().catch(() => { });
-    }
-
-    arState.dancerGroup.position.set(targetPoint.x, targetPoint.y, targetPoint.z);
-    arState.dancerGroup.userData.baseY = targetPoint.y;
-
-    const cameraPos = new THREE.Vector3();
-    activeCam.getWorldPosition(cameraPos);
-    const angle = Math.atan2(
-      cameraPos.x - arState.dancerGroup.position.x,
-      cameraPos.z - arState.dancerGroup.position.z
-    );
-    arState.dancerGroup.userData.baseRotY = angle;
-    arState.dancerGroup.rotation.set(0, angle, 0);
-
-    placeDancer('MassKara Dancer placed on floor');
-  } else {
-    setToast('Point camera at floor and tap directly on the floor grid to place', true);
-  }
+  // Tap-to-drop feature removed: no-op
 }
 
-let countdownInterval = null;
-let startDelayTimeout = null;
-
-export function clearVideoStartDelay() {
-  arState.isVideoCountdownActive = false;
-  if (countdownInterval) {
-    clearInterval(countdownInterval);
-    countdownInterval = null;
-  }
-  if (startDelayTimeout) {
-    clearTimeout(startDelayTimeout);
-    startDelayTimeout = null;
-  }
-}
-
-export function spawnDancerInFrontOfCamera(distance = 1.9, startDelaySeconds = 0) {
+/**
+ * Initiates an automatic 5-second countdown timer before loading and placing the object in front of the user.
+ */
+export function startAutoPlacementCountdown(seconds = AUTO_LOAD_TIMER_SECONDS, distance = PLACEMENT_DISTANCE) {
   clearVideoStartDelay();
+  clearUiControlsRevealTimeout();
+  hideARControls();
+
+  arState.isVideoCountdownActive = true;
+  arState.isPlaced = false;
+
+  // Keep dancer hidden during the countdown
+  if (arState.dancerGroup) {
+    arState.dancerGroup.visible = false;
+  }
+
+  // Ensure video and audio are paused at frame 0
+  const dancerVideo = arState.dancerVideo || document.getElementById('dancer-video');
+  const audioEl = arState.dancerAudioEl || document.getElementById('dancer-audio');
+  if (dancerVideo) {
+    dancerVideo.pause();
+    dancerVideo.currentTime = 0;
+  }
+  if (audioEl) {
+    audioEl.pause();
+    audioEl.currentTime = 0;
+  }
+  stopPositionalAudio();
+
+  let remaining = seconds;
+  setToast(`Loading object in ${remaining}s...`, true);
+
+  countdownInterval = setInterval(() => {
+    remaining -= 1;
+    if (remaining > 0) {
+      setToast(`Loading object in ${remaining}s...`, true);
+      if (dancerVideo && !dancerVideo.paused) {
+        dancerVideo.pause();
+        dancerVideo.currentTime = 0;
+      }
+    } else {
+      clearInterval(countdownInterval);
+      countdownInterval = null;
+    }
+  }, 1000);
+
+  startDelayTimeout = setTimeout(() => {
+    clearVideoStartDelay();
+    if (!arState.arStarted) return;
+
+    // Automatically load & spawn the object directly in front of the user at 5.6m distance, sitting on the floor
+    spawnDancerInFrontOfCamera(distance);
+
+    setToast('Object loaded 5.6m in front of you!', true);
+    setTimeout(() => {
+      dom.toast?.classList.add('hidden');
+      revealARControls();
+    }, 2000);
+  }, seconds * 1000);
+}
+
+/**
+ * Spawns the dancer object directly in front of the user camera at the specified distance (default 5.6m),
+ * resting directly on the floor.
+ */
+export function spawnDancerInFrontOfCamera(distance = PLACEMENT_DISTANCE) {
   if (!arState.dancerGroup) return;
 
-  const cam = arState.camera;
-  const camPos = new THREE.Vector3();
-  let forward = new THREE.Vector3(0, 0, -1);
+  // 1. Get active camera position and orientation (supporting WebXR presenting camera and standard camera)
+  const renderer = arState.renderer;
+  const xrCam = (renderer && renderer.xr && renderer.xr.isPresenting)
+    ? renderer.xr.getCamera()
+    : arState.camera;
+  const activeCam = (xrCam && xrCam.cameras && xrCam.cameras.length > 0)
+    ? xrCam.cameras[0]
+    : (xrCam || arState.camera);
 
-  if (cam) {
-    cam.getWorldPosition(camPos);
-    forward.applyQuaternion(cam.quaternion);
+  const camPos = new THREE.Vector3();
+  const forward = new THREE.Vector3(0, 0, -1);
+
+  if (activeCam) {
+    activeCam.updateMatrixWorld(true);
+    activeCam.getWorldPosition(camPos);
+    forward.applyQuaternion(activeCam.quaternion);
   }
 
-  // Calculate horizontal forward direction so the dancer stands upright on the floor
+  // 2. Calculate horizontal forward direction so the dancer stands upright on the floor
   const horizontal = new THREE.Vector3(forward.x, 0, forward.z).normalize();
   if (horizontal.lengthSq() < 0.001) {
     horizontal.set(0, 0, -1);
   }
 
-  const floorY = (arState.detectedFloorHeight !== undefined && arState.detectedFloorHeight !== null)
-    ? arState.detectedFloorHeight
-    : (camPos.y - 1.25);
+  // 3. Determine floor level:
+  // Use detected floor height from WebXR plane detection or hit-test, or camera-relative floor level
+  let floorY;
+  if (arState.detectedFloorHeight !== null && arState.detectedFloorHeight !== undefined) {
+    floorY = arState.detectedFloorHeight;
+  } else if (arState.lastHitPosition && arState.lastHitPosition.lengthSq() > 0) {
+    floorY = arState.lastHitPosition.y;
+  } else {
+    // Default eye-level to floor estimation (~1.4m below device)
+    floorY = camPos.y - 1.4;
+  }
 
+  // 4. Calculate target 3D coordinates exactly distance (5.6m) away from camera in front of user
   const targetX = camPos.x + horizontal.x * distance;
   const targetZ = camPos.z + horizontal.z * distance;
 
+  // 5. Position dancer directly on the floor
   arState.dancerGroup.position.set(targetX, floorY, targetZ);
   arState.dancerGroup.userData.baseY = floorY;
 
+  // 6. Orient the dancer to face the user camera
   const angle = Math.atan2(camPos.x - targetX, camPos.z - targetZ);
   arState.dancerGroup.userData.baseRotY = angle;
   arState.dancerGroup.rotation.set(0, angle, 0);
 
+  // 7. Make object visible and mark placed
+  arState.dancerGroup.visible = true;
+  arState.isPlaced = true;
+  arState.isSurfaceDetected = true;
+  arState.isVideoCountdownActive = false;
+
+  // 8. Start media playback (video and audio)
   const dancerVideo = arState.dancerVideo || document.getElementById('dancer-video');
   const audioEl = arState.dancerAudioEl || document.getElementById('dancer-audio');
 
   resumeAudioContext();
 
-  if (startDelaySeconds > 0) {
-    arState.isVideoCountdownActive = true;
-
-    // Strictly ensure video and audio are paused and at start frame during the countdown
-    if (dancerVideo) {
-      dancerVideo.pause();
-      dancerVideo.currentTime = 0;
-      if (arState.videoTex) arState.videoTex.needsUpdate = true;
-    }
-    if (audioEl) {
-      audioEl.pause();
-      audioEl.currentTime = 0;
-    }
-    stopPositionalAudio();
-
-    placeDancer(`Get ready! MassKara Dancer starts in ${startDelaySeconds}s...`, false);
-
-    let remaining = startDelaySeconds;
-    countdownInterval = setInterval(() => {
-      remaining -= 1;
-      if (remaining > 0) {
-        setToast(`Get ready! MassKara Dancer starts in ${remaining}s...`, true);
-        if (dancerVideo && !dancerVideo.paused) {
-          dancerVideo.pause();
-          dancerVideo.currentTime = 0;
-        }
-      } else {
-        clearInterval(countdownInterval);
-        countdownInterval = null;
-      }
-    }, 1000);
-
-    startDelayTimeout = setTimeout(() => {
-      clearVideoStartDelay();
-      if (!arState.arStarted || !arState.isPlaced) return;
-
-      // Only play video and audio after the countdown is completely done!
-      if (dancerVideo) {
-        dancerVideo.currentTime = 0;
-        dancerVideo.play().catch(err => console.warn('Delayed video play error:', err));
-      }
-      if (audioEl && arState.isAudioReady && !arState.isAudioMuted) {
-        audioEl.currentTime = 0;
-        audioEl.play().catch(err => console.warn('Delayed audio play error:', err));
-      }
-      if (arState.isAudioReady && !arState.isAudioMuted) {
-        syncAudioToVideo(true);
-      }
-      setToast('Enjoy the MassKara Festival Dance!', true);
-      setTimeout(() => {
-        dom.toast?.classList.add('hidden');
-        revealARControls();
-      }, 2000);
-    }, startDelaySeconds * 1000);
-
-  } else {
-    arState.isVideoCountdownActive = false;
-    // Immediate playback (e.g. on native WebXR or repositioning)
-    if (dancerVideo) {
-      if (dancerVideo.paused) {
-        dancerVideo.currentTime = 0;
-        dancerVideo.play().catch(() => {});
-      }
-    }
-    placeDancer('MassKara Dancer placed in front of you', true);
+  if (dancerVideo) {
+    dancerVideo.currentTime = 0;
+    dancerVideo.play().catch((err) => console.warn('Video auto-play error:', err));
+  }
+  if (audioEl && arState.isAudioReady && !arState.isAudioMuted) {
+    audioEl.currentTime = 0;
+    audioEl.play().catch((err) => console.warn('Audio auto-play error:', err));
+  }
+  if (arState.isAudioReady && !arState.isAudioMuted) {
+    syncAudioToVideo(true);
   }
 }
 
@@ -455,84 +380,31 @@ export function placeDancer(customToast = 'MassKara Dancer placed in front of yo
     }
   }
 
-  // Strictly hide UI controls initially so only the placement toast is visible
   hideARControls();
-
-  // Show ONLY the placement toast text first
   setToast(customToast, true);
 
   if (autoPlayMedia) {
-    // Show only the toast for 2.5 seconds, then hide toast and reveal UI controls (camera, info pill, reposition, exit)
     uiControlsRevealTimeout = setTimeout(() => {
       if (!arState.arStarted || !arState.isPlaced) return;
       dom.toast?.classList.add('hidden');
       revealARControls();
-    }, 2500);
+    }, 2000);
   }
 }
 
 export function repositionDancer() {
   clearUiControlsRevealTimeout();
-  hideARControls();
+  clearVideoStartDelay();
+  arState.ignorePlacementUntil = performance.now() + 600;
 
-  if (arState.isFallbackMode) {
-    arState.ignorePlacementUntil = performance.now() + 600;
-    spawnDancerInFrontOfCamera(1.9, 0);
-    setToast('Dancer repositioned in front of camera');
-    setTimeout(() => {
-      dom.toast?.classList.add('hidden');
-      revealARControls();
-    }, 1800);
-    return;
-  }
-
-  // WebXR mode (Chrome): reset placement state so user can scan and re-place on floor
-  arState.ignorePlacementUntil = performance.now() + 800;
-  arState.isPlaced = false;
-  arState.isSurfaceDetected = false;
-  arState.uiControlsVisible = false;
-  if (arState.dancerGroup) {
-    arState.dancerGroup.visible = false;
-    arState.dancerGroup.scale.set(1, 1, 1);
-  }
-  disablePlacementListener();
-
-  stopPositionalAudio();
-  const dancerVideo = arState.dancerVideo || document.getElementById('dancer-video');
-  if (dancerVideo) {
-    dancerVideo.pause();
-    dancerVideo.currentTime = 0;
-  }
-
-  if (arState.floorGridMesh) {
-    arState.floorGridMesh.visible = true;
-    arState.floorGridMesh.traverse((child) => {
-      if (child.isMesh) child.visible = true;
-    });
-  }
-  if (arState.fallbackFloorGridMesh) {
-    arState.fallbackFloorGridMesh.visible = true;
-  }
-
-  dom.historyModal?.classList.add('hidden');
-  document.body.classList.remove('drawer-open');
-  dom.infoToggleBtn?.classList.add('hidden');
-  dom.captureBtn?.classList.add('hidden');
-  dom.recenterBtn?.classList.add('hidden');
-  dom.exitArBtn?.classList.add('hidden');
-  const topBar = document.querySelector('.top-bar') || document.querySelector('.top-actions');
-  if (topBar) {
-    topBar.classList.add('hidden');
-    topBar.style.setProperty('display', 'none', 'important');
-  }
-
-  setToast('Point camera at floor and move slowly to scan surface', true);
+  // Immediately re-anchor the dancer 5.6m directly in front of the camera on the floor
+  spawnDancerInFrontOfCamera(PLACEMENT_DISTANCE);
+  setToast('Object repositioned 5.6m in front of you', true);
 
   setTimeout(() => {
-    if (arState.arStarted && !arState.isPlaced) {
-      enablePlacementListener();
-    }
-  }, 600);
+    dom.toast?.classList.add('hidden');
+    revealARControls();
+  }, 1800);
 }
 
 export function setupPlacementInputListeners() {
@@ -572,14 +444,7 @@ export function setupPlacementInputListeners() {
     }
   }, { passive: true });
 
-  arState.handlePlacementTap = (e) => {
-    if (!arState.arStarted || arState.isPlaced) return;
-    if (performance.now() < arState.ignorePlacementUntil) return;
-    if (e.target && e.target.closest && e.target.closest('button, .drawer, .top-bar-controls, .top-bar, .dock, input, label, #ARButton')) return;
-
-    const x = e.clientX ?? (e.touches && e.touches[0]?.clientX) ?? (e.changedTouches && e.changedTouches[0]?.clientX);
-    const y = e.clientY ?? (e.touches && e.touches[0]?.clientY) ?? (e.changedTouches && e.changedTouches[0]?.clientY);
-    updateTapCoordinates(x, y);
-    handleFloorTap(x, y);
+  arState.handlePlacementTap = () => {
+    // Tap-to-drop removed: no-op
   };
 }

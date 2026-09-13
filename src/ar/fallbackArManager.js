@@ -8,10 +8,12 @@ import {
   enablePlacementListener,
   disablePlacementListener,
   spawnDancerInFrontOfCamera,
+  startAutoPlacementCountdown,
   clearVideoStartDelay,
   clearUiControlsRevealTimeout,
   hideARControls
 } from './placementController.js';
+import { AUTO_LOAD_TIMER_SECONDS, PLACEMENT_DISTANCE } from '../config/constants.js';
 
 // Pre-allocated vectors & quaternions for device orientation
 const zee = new THREE.Vector3(0, 0, 1);
@@ -106,8 +108,8 @@ async function requestOrientationPermission() {
  */
 export function repositionFallbackDancer() {
   arState.ignorePlacementUntil = performance.now() + 600;
-  spawnDancerInFrontOfCamera(1.9);
-  setToast('Dancer repositioned in front of camera');
+  spawnDancerInFrontOfCamera(PLACEMENT_DISTANCE);
+  setToast('Object repositioned 5.6m in front of you', true);
   setTimeout(() => {
     dom.toast?.classList.add('hidden');
   }, 1800);
@@ -147,18 +149,26 @@ export async function startFallbackAR() {
     // 3. Attach camera stream to background video element
     const cameraVideo = dom.arCameraFeed || $('ar-camera-feed');
     if (cameraVideo) {
+      cameraVideo.muted = true;
+      cameraVideo.playsInline = true;
+      cameraVideo.setAttribute('playsinline', '');
+      cameraVideo.setAttribute('webkit-playsinline', '');
       cameraVideo.srcObject = stream;
       cameraVideo.classList.remove('hidden');
-      await cameraVideo.play().catch(err => console.warn('Camera video play error:', err));
+      try {
+        await cameraVideo.play();
+      } catch (err) {
+        console.warn('Camera video play error:', err);
+      }
     }
 
-    // 4. Set state flags: AR is active, dancer is placed immediately in front of camera
+    // 4. Set state flags: AR is active, object will load automatically after 5-second countdown
     arState.isFallbackMode = true;
     arState.arStarted = true;
-    arState.isPlaced = true;
+    arState.isPlaced = false;
     arState.isSurfaceDetected = true;
     arState.uiControlsVisible = false;
-    arState.detectedFloorHeight = -1.25;
+    arState.detectedFloorHeight = -1.4;
     document.body.classList.add('ar-active', 'ar-fallback-active');
 
     // Disable Three.js WebXR presentation mode so camera renders normally
@@ -199,8 +209,8 @@ export async function startFallbackAR() {
       arState.camera.rotation.set(0, 0, 0);
     }
 
-    // 10. Automatically spawn MassKara dancer directly in front of camera with 4-second pause before video play!
-    spawnDancerInFrontOfCamera(1.9, 4);
+    // 10. Automatically start 5-second countdown timer before loading object 5.6m in front of camera
+    startAutoPlacementCountdown(AUTO_LOAD_TIMER_SECONDS, PLACEMENT_DISTANCE);
 
     // 11. Update UI layout to show controls and Bacolod mosaic ribbons
     updateUILayout(null, true);

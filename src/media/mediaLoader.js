@@ -607,7 +607,7 @@ export async function tryLoadGlb(urlOrBuffer, loadToken = ++arState.mediaLoadTok
       setMediaReady(true);
       hideLoadingBar();
       if (arState.arStarted) {
-        setToast('3D Model Ready! Aim and tap to place.');
+        setToast('3D Model Ready!');
       }
     },
     (err) => {
@@ -647,7 +647,7 @@ export function tryLoadImage(url, loadToken = ++arState.mediaLoadToken) {
       console.warn('Image load error:', err);
       hideLoadingBar();
       if (arState.arStarted) {
-        setToast('QR scanned. Aim and tap to place');
+        setToast('Image failed to load.');
       }
     }
   );

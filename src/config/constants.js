@@ -11,6 +11,8 @@ export const DEFAULT_MEDIA_URL =
 
 export const VIDEO_ASPECT = 9 / 16;
 export const BILLBOARD_HEIGHT = 2.0;    // 2.0 meters scale (lifesize / feet touching floor)
+export const PLACEMENT_DISTANCE = 5.6;  // 5.6 meters away from user camera
+export const AUTO_LOAD_TIMER_SECONDS = 5; // 5-second countdown timer before loading object
 export const PLACEMENT_FLOAT_AMPLITUDE = 0.04;
 export const PLANE_GRID_SURFACE_OFFSET = 0.003;
 

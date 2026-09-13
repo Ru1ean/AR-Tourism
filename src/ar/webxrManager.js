@@ -6,10 +6,10 @@ import { setToast } from '../ui/toast.js';
 import { showBrowserIncompatibleNotice } from '../ui/loadingBar.js';
 import { updateUILayout, unpinARControls } from '../ui/orientationController.js';
 import {
-  enablePlacementListener,
   resetArSessionState,
-  onSelect
+  startAutoPlacementCountdown
 } from './placementController.js';
+import { AUTO_LOAD_TIMER_SECONDS, PLACEMENT_DISTANCE } from '../config/constants.js';
 import { stopPositionalAudio } from '../audio/audioController.js';
 import { startFallbackAR, stopFallbackAR, repositionFallbackDancer } from './fallbackArManager.js';
 
@@ -83,29 +83,18 @@ export function handleSessionStart() {
   }
   stopPositionalAudio();
 
-  // 6. Hide floor grid initially until surface is detected by SLAM hit-test / plane detection
+  // 6. Hide floor grid and surface scanner reticle
   if (arState.floorGridMesh) arState.floorGridMesh.visible = false;
   if (arState.fallbackFloorGridMesh) arState.fallbackFloorGridMesh.visible = false;
   dom.surfaceScannerReticle?.classList.add('hidden');
 
-  // 7. Show initial floor scanning prompt
-  setToast('Point camera at floor and move slowly to scan surface', true);
-  const toast = dom.toast || $('toast');
-  if (toast) {
-    toast.classList.remove('hidden');
-  }
-
-  // 8. Layout orientation & enable placement listeners
+  // 7. Layout orientation
   updateUILayout(null, true);
   requestAnimationFrame(() => updateUILayout(null, true));
   setTimeout(() => updateUILayout(null, true), 150);
 
-  enablePlacementListener();
-  setTimeout(() => {
-    if (arState.arStarted && !arState.isPlaced) {
-      enablePlacementListener();
-    }
-  }, 400);
+  // 8. Start automatic 5-second countdown timer before loading object 5.6m in front of user
+  startAutoPlacementCountdown(AUTO_LOAD_TIMER_SECONDS, PLACEMENT_DISTANCE);
 }
 
 export function handleSessionEndCleanup() {
@@ -114,6 +103,18 @@ export function handleSessionEndCleanup() {
   arState.hitTestSource = null;
   resetArSessionState();
   arState.xrLastLandscape = null;
+
+  // Clean up any concurrent camera stream tracks
+  if (arState.cameraStream) {
+    arState.cameraStream.getTracks().forEach(t => t.stop());
+    arState.cameraStream = null;
+  }
+  const cameraVideo = dom.arCameraFeed || $('ar-camera-feed');
+  if (cameraVideo) {
+    cameraVideo.pause();
+    cameraVideo.srcObject = null;
+    cameraVideo.classList.add('hidden');
+  }
 
   document.body.classList.remove('ar-active');
   document.body.classList.remove('landscape');
@@ -216,7 +217,7 @@ export function setupWebXR(renderer, scene) {
   // Standard safe WebXR features supported across Chrome, Brave, and Edge
   const sessionInit = {
     requiredFeatures: ['hit-test'],
-    optionalFeatures: ['dom-overlay', 'plane-detection'],
+    optionalFeatures: ['dom-overlay', 'plane-detection', 'camera-access'],
     domOverlay: overlayRoot ? { root: overlayRoot } : undefined
   };
 
@@ -268,21 +269,21 @@ export function setupWebXR(renderer, scene) {
     let session = null;
     const uiOverlay = document.getElementById('ui-overlay');
 
-    // Attempt 1: Hit-test with dom-overlay
+    // Attempt 1: Hit-test with dom-overlay & camera-access
     try {
       session = await navigator.xr.requestSession('immersive-ar', {
         requiredFeatures: ['hit-test'],
-        optionalFeatures: ['dom-overlay', 'plane-detection'],
+        optionalFeatures: ['dom-overlay', 'plane-detection', 'camera-access'],
         domOverlay: uiOverlay ? { root: uiOverlay } : undefined
       });
     } catch (err1) {
       console.warn('[WebXR] Primary session failed, trying fallback init:', err1);
 
-      // Attempt 2: Minimal fallback (hit-test + dom-overlay only)
+      // Attempt 2: Minimal fallback (hit-test + dom-overlay + camera-access)
       try {
         session = await navigator.xr.requestSession('immersive-ar', {
           requiredFeatures: ['hit-test'],
-          optionalFeatures: ['dom-overlay'],
+          optionalFeatures: ['dom-overlay', 'camera-access'],
           domOverlay: uiOverlay ? { root: uiOverlay } : undefined
         });
       } catch (err2) {
@@ -302,6 +303,45 @@ export function setupWebXR(renderer, scene) {
     }
 
     if (session) {
+      const hasCameraAccess = session.enabledFeatures && session.enabledFeatures.includes('camera-access');
+
+      // Attempt concurrent camera stream for photo capture if WebXR lacks raw camera-access
+      let hasConcurrentStream = false;
+      if (!hasCameraAccess && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: 'environment' },
+              width: { ideal: 1920, min: 640 },
+              height: { ideal: 1080, min: 480 }
+            },
+            audio: false
+          });
+          arState.cameraStream = stream;
+          const cameraVideo = dom.arCameraFeed || $('ar-camera-feed');
+          if (cameraVideo) {
+            cameraVideo.muted = true;
+            cameraVideo.playsInline = true;
+            cameraVideo.setAttribute('playsinline', '');
+            cameraVideo.setAttribute('webkit-playsinline', '');
+            cameraVideo.srcObject = stream;
+            await cameraVideo.play().catch(() => {});
+            hasConcurrentStream = true;
+          }
+        } catch (streamErr) {
+          console.warn('[WebXR] Concurrent camera stream not supported alongside WebXR on this device:', streamErr);
+        }
+      }
+
+      // If WebXR has neither camera-access nor concurrent stream, native WebXR will produce pitch-black photos.
+      // Automatically switch to Camera AR (startFallbackAR) so photo captures have full surroundings!
+      if (!hasCameraAccess && !hasConcurrentStream) {
+        console.info('[WebXR] WebXR session lacks camera access. Switching to Camera AR for full photo capture support.');
+        try { await session.end(); } catch (_) {}
+        await startFallbackAR();
+        return;
+      }
+
       try {
         renderer.xr.setReferenceSpaceType('local');
         await renderer.xr.setSession(session);
@@ -321,10 +361,9 @@ export function setupWebXR(renderer, scene) {
     handleSessionEndCleanup();
   });
 
-  // Controller for select (tap to place)
+  // WebXR Controller
   if (!arState.controller) {
     arState.controller = renderer.xr.getController(0);
-    arState.controller.addEventListener('select', onSelect);
     scene.add(arState.controller);
   }
 }

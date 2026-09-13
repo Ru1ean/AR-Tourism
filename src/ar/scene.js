@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { arState } from './state.js';
 import { dom, $ } from '../ui/domElements.js';
-import { buildPulsatingFloorGrid } from '../shaders/floorGridShader.js';
 import { buildVideoBillboard } from './billboard.js';
 import { updateDetectedPlaneGrids } from './planeDetector.js';
 import { resetArSessionState, setupPlacementInputListeners, disablePlacementListener } from './placementController.js';
@@ -48,14 +47,14 @@ export function initThreeScene() {
   const canvas = dom.arCanvas || $('ar-canvas');
 
   arState.scene = new THREE.Scene();
+  arState.scene.background = null; // Strictly null for transparent AR camera passthrough
   const aspect = window.innerWidth / window.innerHeight;
   arState.camera = new THREE.PerspectiveCamera(70, aspect, 0.01, 20);
   arState.renderer = new THREE.WebGLRenderer({
     canvas,
     alpha: true,
     antialias: true,
-    powerPreference: 'high-performance',
-    preserveDrawingBuffer: true
+    powerPreference: 'high-performance'
   });
   arState.renderer.setSize(window.innerWidth, window.innerHeight);
   arState.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
@@ -63,8 +62,6 @@ export function initThreeScene() {
 
   // Enable WebXR
   arState.renderer.xr.enabled = true;
-  arState.renderer.xr.setFramebufferScaleFactor?.(0.8);
-  arState.renderer.xr.setFoveation?.(1);
 
   // Lighting
   arState.scene.add(new THREE.AmbientLight(0xffffff, 1.2));
@@ -74,11 +71,6 @@ export function initThreeScene() {
 
   // Setup WebXR & Controller
   setupWebXR(arState.renderer, arState.scene);
-
-  // Pulsating Grid Floor
-  arState.floorGridMesh = buildPulsatingFloorGrid();
-  arState.floorGridMesh.visible = false;
-  arState.scene.add(arState.floorGridMesh);
 
   // 3D Object / Video Billboard container
   arState.dancerGroup = buildVideoBillboard();
@@ -121,10 +113,6 @@ export function initThreeScene() {
   const renderLoop = (timestamp, frame) => {
     const delta = clock.getDelta();
     const elapsed = clock.getElapsedTime();
-
-    if (arState.floorGridMaterial && arState.floorGridMesh?.visible) {
-      arState.floorGridMaterial.uniforms.uTime.value = elapsed;
-    }
 
     if (arState.mixer) {
       if (arState.arStarted && arState.isPlaced && arState.dancerGroup && arState.dancerGroup.visible) {
@@ -176,24 +164,8 @@ export function initThreeScene() {
         }
       }
 
-      const hasActivePlaneGrid = updateDetectedPlaneGrids(frame, referenceSpace, currentHitMatrix);
-      arState.lastHitPoseMatrix = currentHitMatrix && (!arState.planeDetectionAvailable || hasActivePlaneGrid)
-        ? currentHitMatrix
-        : null;
-
-      if (!arState.isPlaced) {
-        if (hasActivePlaneGrid) {
-          if (!arState.isSurfaceDetected) {
-            arState.isSurfaceDetected = true;
-            setToast('Surface detected! Tap anywhere on grid to place', true);
-          }
-        } else {
-          if (arState.isSurfaceDetected) {
-            arState.isSurfaceDetected = false;
-            setToast('Point camera at floor and move slowly to scan surface', true);
-          }
-        }
-      }
+      updateDetectedPlaneGrids(frame, referenceSpace, currentHitMatrix);
+      arState.lastHitPoseMatrix = currentHitMatrix;
     }
 
     if (arState.isPlaced && arState.dancerGroup) {

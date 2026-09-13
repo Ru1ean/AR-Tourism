@@ -55,7 +55,7 @@ export const arState = {
   deviceOrientationHandler: null,
   deviceOrientationData: { alpha: 0, beta: 0, gamma: 0 },
   deviceOrientationActive: false,
-  fallbackBasePosition: new THREE.Vector3(0, -0.48, -2.1),
+  fallbackBasePosition: new THREE.Vector3(0, -1.4, -5.6),
 
   // WebXR Hit test & plane detection
   hitTestSource: null,

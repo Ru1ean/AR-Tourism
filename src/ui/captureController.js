@@ -4,6 +4,49 @@ import { dom, $ } from './domElements.js';
 import { setToast } from './toast.js';
 import { getCameraBackgroundMesh } from '../shaders/backgroundShader.js';
 
+/**
+ * Ensures that a video element has decoded frames and valid dimensions before drawing to canvas
+ */
+async function ensureVideoFrameReady(video, maxWaitMs = 1500) {
+  if (!video) return false;
+  if (video.videoWidth > 0 && video.videoHeight > 0 && !video.paused) {
+    return true;
+  }
+
+  return new Promise((resolve) => {
+    let finished = false;
+    const timer = setTimeout(() => {
+      if (!finished) {
+        finished = true;
+        resolve(video.videoWidth > 0 && video.videoHeight > 0);
+      }
+    }, maxWaitMs);
+
+    const onReady = () => {
+      if (!finished && video.videoWidth > 0 && video.videoHeight > 0) {
+        finished = true;
+        clearTimeout(timer);
+        resolve(true);
+      }
+    };
+
+    video.addEventListener('loadeddata', onReady, { once: true });
+    video.addEventListener('canplay', onReady, { once: true });
+    video.addEventListener('playing', onReady, { once: true });
+
+    video.play().then(onReady).catch(() => {});
+
+    // Polling interval in case events already fired
+    const interval = setInterval(() => {
+      if (video.videoWidth > 0 && video.videoHeight > 0) {
+        clearInterval(interval);
+        onReady();
+      }
+    }, 40);
+    setTimeout(() => clearInterval(interval), maxWaitMs);
+  });
+}
+
 export function requestARSnapshot() {
   return new Promise((resolve, reject) => {
     arState.isCaptureRequested = true;
@@ -14,14 +57,15 @@ export function requestARSnapshot() {
         arState.isCaptureRequested = false;
         arState.capturePromiseResolver = null;
       }
-    }, 4000);
+    }, 5000);
   });
 }
 
-export function executeCaptureFrame(frame) {
+export async function executeCaptureFrame(frame) {
   const resolver = arState.capturePromiseResolver;
   arState.isCaptureRequested = false;
   arState.capturePromiseResolver = null;
+  if (!resolver) return;
 
   const renderer = arState.renderer;
   const scene = arState.scene;
@@ -42,28 +86,55 @@ export function executeCaptureFrame(frame) {
 
     const prevRenderTarget = renderer.getRenderTarget();
     renderer.setRenderTarget(arState.captureRenderTarget);
+    renderer.setClearColor(0x000000, 0);
     renderer.clear();
 
-    // 1. Render camera background if WebXR camera texture is available
+    // 1. Check if WebXR raw camera texture is available via XRWebGLBinding
     let hasCameraBg = false;
-    if (frame && renderer.xr.isPresenting) {
-      const pose = frame.getViewerPose(renderer.xr.getReferenceSpace());
-      if (pose && pose.views && pose.views.length > 0) {
-        const xrCam = pose.views[0].camera;
-        if (xrCam) {
-          const cameraTex = renderer.xr.getCameraTexture(xrCam);
-          if (cameraTex) {
-            const { scene: bgScene, mat: bgMat } = getCameraBackgroundMesh();
-            bgMat.uniforms.map.value = cameraTex;
-            const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-            renderer.render(bgScene, orthoCam);
-            hasCameraBg = true;
+    if (renderer.xr && renderer.xr.isPresenting) {
+      try {
+        const session = renderer.xr.getSession();
+        const gl = renderer.getContext();
+        const binding = (typeof renderer.xr.getBinding === 'function' ? renderer.xr.getBinding() : null) ||
+          (typeof XRWebGLBinding !== 'undefined' && session ? new XRWebGLBinding(session, gl) : null);
+        const refSpace = renderer.xr.getReferenceSpace();
+        const pose = frame && refSpace ? frame.getViewerPose(refSpace) : null;
+
+        let glCameraImage = null;
+        let xrCam = null;
+
+        if (pose && pose.views && pose.views.length > 0) {
+          xrCam = pose.views[0].camera;
+          if (binding && xrCam && typeof binding.getCameraImage === 'function') {
+            try {
+              glCameraImage = binding.getCameraImage(xrCam);
+            } catch (e) {
+              console.warn('[Capture] getCameraImage failed:', e);
+            }
           }
         }
+
+        let cameraTex = null;
+        if (glCameraImage) {
+          cameraTex = new THREE.ExternalTexture(glCameraImage);
+        } else if (xrCam && typeof renderer.xr.getCameraTexture === 'function') {
+          cameraTex = renderer.xr.getCameraTexture(xrCam);
+        }
+
+        if (cameraTex) {
+          const { scene: bgScene, mat: bgMat } = getCameraBackgroundMesh();
+          bgMat.uniforms.map.value = cameraTex;
+          cameraTex.needsUpdate = true;
+          const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+          renderer.render(bgScene, orthoCam);
+          hasCameraBg = true;
+        }
+      } catch (xrErr) {
+        console.warn('[Capture] WebXR camera texture probe:', xrErr);
       }
     }
 
-    // 2. Render 3D Scene (dancer billboard + particle effects) on top
+    // 2. Render 3D Scene on top with alpha transparency preserved
     const xrCam = (renderer.xr && renderer.xr.isPresenting) ? renderer.xr.getCamera() : camera;
     const activeCam = (xrCam && xrCam.cameras && xrCam.cameras.length > 0) ? xrCam.cameras[0] : (xrCam || camera);
 
@@ -76,12 +147,12 @@ export function executeCaptureFrame(frame) {
     renderer.readRenderTargetPixels(arState.captureRenderTarget, 0, 0, W, H, pixelBuffer);
     renderer.setRenderTarget(prevRenderTarget);
 
-    // 4. Draw to Canvas 2D with WebGL bottom-left to top-left flip
-    const outCanvas = document.createElement('canvas');
-    outCanvas.width = W;
-    outCanvas.height = H;
-    const ctx = outCanvas.getContext('2d');
-    const imgData = ctx.createImageData(W, H);
+    // 4. Create 2D canvas of the 3D scene (with vertical flip from WebGL)
+    const dancerCanvas = document.createElement('canvas');
+    dancerCanvas.width = W;
+    dancerCanvas.height = H;
+    const dCtx = dancerCanvas.getContext('2d');
+    const imgData = dCtx.createImageData(W, H);
     const data = imgData.data;
 
     for (let y = 0; y < H; y++) {
@@ -90,9 +161,86 @@ export function executeCaptureFrame(frame) {
       const dstOffset = y * W * 4;
       data.set(pixelBuffer.subarray(srcOffset, srcOffset + W * 4), dstOffset);
     }
-    ctx.putImageData(imgData, 0, 0);
+    dCtx.putImageData(imgData, 0, 0);
 
-    // 5. Add festive Bacolod watermark ribbon/badge
+    // 5. Composite camera surroundings background with transparent 3D scene
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = W;
+    outCanvas.height = H;
+    const ctx = outCanvas.getContext('2d');
+
+    if (hasCameraBg) {
+      // Camera texture was already rendered into the WebGL render target beneath the dancer
+      ctx.drawImage(dancerCanvas, 0, 0, W, H);
+    } else {
+      // Base layer: draw live camera video feed from arCameraFeed or getUserMedia
+      let cameraVideo = dom.arCameraFeed || $('ar-camera-feed');
+      let tempStream = null;
+
+      if (!cameraVideo) {
+        cameraVideo = document.createElement('video');
+        cameraVideo.id = 'ar-camera-feed';
+        cameraVideo.className = 'ar-camera-feed hidden';
+        document.body.appendChild(cameraVideo);
+      }
+
+      // If cameraVideo doesn't have an active stream or valid dimensions, initialize it
+      if (!cameraVideo.srcObject || cameraVideo.videoWidth === 0 || cameraVideo.paused) {
+        if (arState.cameraStream && arState.cameraStream.active) {
+          cameraVideo.srcObject = arState.cameraStream;
+          cameraVideo.muted = true;
+          cameraVideo.setAttribute('playsinline', '');
+          cameraVideo.setAttribute('webkit-playsinline', '');
+          await ensureVideoFrameReady(cameraVideo, 1200);
+        } else if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          try {
+            tempStream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                facingMode: { ideal: 'environment' },
+                width: { ideal: 1920, min: 640 },
+                height: { ideal: 1080, min: 480 }
+              },
+              audio: false
+            });
+            cameraVideo.srcObject = tempStream;
+            cameraVideo.muted = true;
+            cameraVideo.setAttribute('playsinline', '');
+            cameraVideo.setAttribute('webkit-playsinline', '');
+            await ensureVideoFrameReady(cameraVideo, 1500);
+          } catch (camErr) {
+            console.warn('[Capture] Live camera stream request failed:', camErr);
+          }
+        }
+      } else {
+        await ensureVideoFrameReady(cameraVideo, 500);
+      }
+
+      // Draw camera video feed covering entire screen (object-fit: cover)
+      if (cameraVideo && cameraVideo.videoWidth > 0 && cameraVideo.videoHeight > 0) {
+        const vw = cameraVideo.videoWidth;
+        const vh = cameraVideo.videoHeight;
+        const videoRatio = vw / vh;
+        const screenRatio = W / H;
+        let sx = 0, sy = 0, sw = vw, sh = vh;
+        if (videoRatio > screenRatio) {
+          sw = vh * screenRatio;
+          sx = (vw - sw) / 2;
+        } else {
+          sh = vw / screenRatio;
+          sy = (vh - sh) / 2;
+        }
+        ctx.drawImage(cameraVideo, sx, sy, sw, sh, 0, 0, W, H);
+      }
+
+      // Draw transparent 3D scene (dancer) on top of camera surroundings
+      ctx.drawImage(dancerCanvas, 0, 0, W, H);
+
+      if (tempStream) {
+        tempStream.getTracks().forEach((t) => t.stop());
+      }
+    }
+
+    // 6. Add festive Bacolod watermark ribbon/badge
     const badgeH = Math.round(52 * (W / 720));
     const fontSize = Math.round(18 * (W / 720));
     ctx.fillStyle = 'rgba(15, 15, 20, 0.65)';
@@ -101,7 +249,7 @@ export function executeCaptureFrame(frame) {
     ctx.fillStyle = '#fbb03b';
     ctx.font = `bold ${Math.max(fontSize, 14)}px "Plus Jakarta Sans", "Baloo 2", sans-serif`;
     ctx.textBaseline = 'middle';
-    ctx.fillText('🎭 Bacolod Tourism AR · City of Smiles', Math.round(20 * (W / 720)), H - badgeH / 2);
+    ctx.fillText('Bacolod Tourism AR · City of Smiles', Math.round(20 * (W / 720)), H - badgeH / 2);
 
     outCanvas.toBlob((blob) => {
       if (blob) {
@@ -147,7 +295,7 @@ export async function handleSaveOrSharePhoto(blob, filename = 'bacolod-tourism-a
       await navigator.share({
         files: [file],
         title: 'Bacolod Tourism AR Photo',
-        text: 'Exploring Bacolod in Augmented Reality! 🎭✨'
+        text: 'Exploring Bacolod in Augmented Reality!'
       });
       return;
     } catch (shareErr) {
@@ -184,75 +332,11 @@ export function setupCapture() {
 
       let capturedBlob = null;
 
-      // Method 0: Fallback Camera AR composited snapshot (Firefox & iOS)
-      if (arState.isFallbackMode) {
-        const cameraVideo = dom.arCameraFeed || $('ar-camera-feed');
-        const threeCanvas = dom.arCanvas || $('ar-canvas');
-
-        const W = window.innerWidth;
-        const H = window.innerHeight;
-
-        const outCanvas = document.createElement('canvas');
-        outCanvas.width = W;
-        outCanvas.height = H;
-        const ctx = outCanvas.getContext('2d');
-
-        // Draw camera video with object-fit: cover cropping
-        if (cameraVideo && cameraVideo.videoWidth > 0) {
-          const vw = cameraVideo.videoWidth;
-          const vh = cameraVideo.videoHeight;
-          const videoRatio = vw / vh;
-          const screenRatio = W / H;
-          let sx = 0;
-          let sy = 0;
-          let sw = vw;
-          let sh = vh;
-
-          if (videoRatio > screenRatio) {
-            sw = vh * screenRatio;
-            sx = (vw - sw) / 2;
-          } else {
-            sh = vw / screenRatio;
-            sy = (vh - sh) / 2;
-          }
-          ctx.drawImage(cameraVideo, sx, sy, sw, sh, 0, 0, W, H);
-        } else {
-          ctx.fillStyle = '#050508';
-          ctx.fillRect(0, 0, W, H);
-        }
-
-        // Draw 3D dancer layer
-        if (threeCanvas && threeCanvas.width > 0) {
-          ctx.drawImage(threeCanvas, 0, 0, W, H);
-        }
-
-        // Add festive Bacolod watermark ribbon/badge
-        const badgeH = Math.max(Math.round(48 * (W / 720)), 36);
-        const fontSize = Math.max(Math.round(16 * (W / 720)), 13);
-        ctx.fillStyle = 'rgba(15, 15, 20, 0.65)';
-        ctx.fillRect(0, H - badgeH, W, badgeH);
-
-        ctx.fillStyle = '#ffffff';
-        ctx.font = `bold ${fontSize}px "Plus Jakarta Sans", sans-serif`;
-        ctx.textBaseline = 'middle';
-        ctx.fillText('Bacolod Tourism AR', 18, H - badgeH / 2);
-
-        ctx.font = `500 ${Math.round(fontSize * 0.85)}px "Plus Jakarta Sans", sans-serif`;
-        ctx.fillStyle = '#FBB03B';
-        const rightText = 'City of Smiles';
-        const textWidth = ctx.measureText(rightText).width;
-        ctx.fillText(rightText, W - textWidth - 18, H - badgeH / 2);
-
-        capturedBlob = await new Promise((res) => outCanvas.toBlob(res, 'image/jpeg', 0.95));
-      }
-
-      // Method 1: In-WebXR render snapshot
-      if (!capturedBlob) {
-        try {
-          capturedBlob = await requestARSnapshot();
-        } catch (xrSnapErr) {
-          console.warn('Inside-loop capture fallback:', xrSnapErr);
-        }
+      // Method 1: AR snapshot capturing camera background + 3D object
+      try {
+        capturedBlob = await requestARSnapshot();
+      } catch (xrSnapErr) {
+        console.warn('Primary AR snapshot error:', xrSnapErr);
       }
 
       // Method 2: Screen Capture API fallback if supported
@@ -285,14 +369,6 @@ export function setupCapture() {
           capturedBlob = await new Promise((res) => outCanvas.toBlob(res, 'image/jpeg', 0.95));
         } catch (screenErr) {
           console.warn('Screen capture skipped/declined:', screenErr);
-        }
-      }
-
-      // Method 3: Direct canvas toBlob fallback
-      if (!capturedBlob) {
-        const threeCanvas = dom.arCanvas;
-        if (threeCanvas && threeCanvas.width > 0 && threeCanvas.height > 0) {
-          capturedBlob = await new Promise((res) => threeCanvas.toBlob(res, 'image/jpeg', 0.95));
         }
       }
 
