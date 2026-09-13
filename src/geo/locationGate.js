@@ -1,6 +1,6 @@
 import { arState } from '../ar/state.js';
 import { $, dom } from '../ui/domElements.js';
-import { ALLOWED_LOCATIONS, GEO_ICONS } from '../config/locations.js';
+import { ALLOWED_LOCATIONS, GEO_ICONS, DEFAULT_GEOFENCE_ENABLED } from '../config/locations.js';
 import { launchDirectAR } from '../ar/scene.js';
 import { resetArSessionState } from '../ar/placementController.js';
 import { stopPositionalAudio } from '../audio/audioController.js';
@@ -65,7 +65,7 @@ function setActivatingDeviceGpsState() {
     descEl.innerHTML = `
       <p>Location permission is granted! Automatically connecting to high-accuracy device GPS…</p>
       <p class="location-desc-sub" style="color: var(--bacolod-orange, #ee6327); font-weight: 600;">
-        ⚡ Acquiring real-time GPS coordinates…
+        Acquiring real-time GPS coordinates…
       </p>
     `;
   }
@@ -94,7 +94,7 @@ function setWaitingForDeviceGpsState() {
     descEl.innerHTML = `
       <p>Browser permission is allowed! If prompted on your device, tap <strong>OK</strong> to turn on location, or turn on <strong>Location / GPS</strong> in your phone's quick settings.</p>
       <p class="location-desc-sub" style="color: var(--bacolod-orange, #ee6327); font-weight: 600;">
-        ⚡ Waiting for GPS signal… automatically connecting once turned on.
+        Waiting for GPS signal… automatically connecting once turned on.
       </p>
     `;
   }
@@ -472,7 +472,12 @@ export function startRealtimeLocationTracking() {
 }
 
 export function isGeofenceEnabled() {
-  return false;
+  const saved = localStorage.getItem('geofence_enabled_v2');
+  if (saved === null) {
+    localStorage.setItem('geofence_enabled_v2', DEFAULT_GEOFENCE_ENABLED ? 'true' : 'false');
+    return DEFAULT_GEOFENCE_ENABLED;
+  }
+  return saved === 'true';
 }
 
 export function syncGeofenceToggleUI(enabled) {
@@ -510,6 +515,7 @@ export function stopRealtimeLocationTracking() {
 }
 
 export function setGeofenceEnabled(enabled) {
+  localStorage.setItem('geofence_enabled_v2', enabled ? 'true' : 'false');
   localStorage.setItem('geofence_enabled', enabled ? 'true' : 'false');
   syncGeofenceToggleUI(enabled);
 

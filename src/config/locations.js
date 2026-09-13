@@ -1,4 +1,6 @@
 // ── Geofence Configuration: Designated Allowed Locations ─────────────
+export const DEFAULT_GEOFENCE_ENABLED = true;
+
 export const ALLOWED_LOCATIONS = [
   {
     id: 'ngc',

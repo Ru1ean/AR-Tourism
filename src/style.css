@@ -300,11 +300,11 @@ body.ar-active {
 }
 
 /* ──────────────────────────────────────────
-   Geofence Enable/Disable Toggle & Location Gate (Hidden)
+   Geofence Enable/Disable Toggle & Location Gate
 ────────────────────────────────────────── */
-.geofence-toggle-wrap,
-#location-gate {
+.geofence-toggle-wrap {
   display: none !important;
+  align-items: center;
 }
 
 .geofence-toggle-label {
