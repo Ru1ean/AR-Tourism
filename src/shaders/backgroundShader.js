@@ -19,7 +19,10 @@ export function getCameraBackgroundMesh() {
         uniform sampler2D map;
         varying vec2 vUv;
         void main() {
-          gl_FragColor = texture2D(map, vUv);
+          vec4 col = texture2D(map, vUv);
+          // Linearize camera texture to prevent double-gamma lifting by sRGB render target
+          col.rgb = pow(col.rgb, vec3(2.2));
+          gl_FragColor = col;
         }
       `,
       depthTest: false,

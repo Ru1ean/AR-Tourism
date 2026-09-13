@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import defaultVideoUrl from '../assets/Composition_greybg.mp4';
+import defaultAudioUrl from '../assets/audioclip-1788760841000-245087 (2).mp4';
 
 export const RETICLE_ACCENT = 0xee6327; // Bacolod Orange
 export const RETICLE_LIGHT = 0xfbb03b;  // Bacolod Yellow
@@ -7,7 +9,13 @@ export const DEFAULT_MEDIA_URL =
   import.meta.env.FILE_LINK ||
   import.meta.env.VITE_FILE_LINK ||
   import.meta.env.VITE_DEFAULT_MEDIA_URL ||
-  'https://file.garden/aoVl-M0-p1TyFay4/maskaramen';
+  defaultVideoUrl;
+
+export const DEFAULT_AUDIO_URL =
+  import.meta.env.AUDIO_LINK ||
+  import.meta.env.VITE_AUDIO_LINK ||
+  import.meta.env.VITE_DEFAULT_AUDIO_URL ||
+  defaultAudioUrl;
 
 export const VIDEO_ASPECT = 9 / 16;
 export const BILLBOARD_HEIGHT = 2.0;    // 2.0 meters scale (lifesize / feet touching floor)

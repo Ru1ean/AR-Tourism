@@ -1322,13 +1322,14 @@ body.ar-active {
   color: var(--c-text);
 }
 
-/* Toast */
+/* Toast (Notice positioned slightly lower from top) */
 .toast {
   position: absolute;
-  bottom: calc(max(env(safe-area-inset-bottom, 0px), 0px) + 48px);
+  top: calc(max(env(safe-area-inset-top, 0px), 0px) + 76px);
+  bottom: auto;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 60;
+  z-index: 100;
 
   background: rgba(255, 255, 255, 0.94);
   backdrop-filter: blur(16px);
@@ -1367,7 +1368,7 @@ body.ar-active {
 .toast.hidden {
   opacity: 0 !important;
   pointer-events: none !important;
-  transform: translate(-50%, 10px) !important;
+  transform: translate(-50%, -14px) !important;
 }
 
 /* ──────────────────────────────────────────
@@ -2069,12 +2070,12 @@ body.is-landscape #info-toggle-btn:not(.hidden) {
   pointer-events: auto !important;
 }
 
-/* ── Landscape: toast floats top-center ─────────────────────────────────── */
+/* ── Landscape: toast floats top-center slightly lower ──────────────────── */
 .is-landscape .toast,
 body.is-landscape .toast,
 body.landscape .toast {
   position: absolute !important;
-  top: calc(var(--ar-edge-t, 38px) + 4px) !important;
+  top: calc(max(env(safe-area-inset-top, 0px), 0px) + 54px) !important;
   bottom: auto !important;
   left: 50% !important;
   right: auto !important;
@@ -2082,7 +2083,7 @@ body.landscape .toast {
   max-width: min(480px, 52vw) !important;
   font-size: 12px !important;
   text-align: center !important;
-  z-index: 65 !important;
+  z-index: 100 !important;
 }
 
 /* ── Landscape ui-wrapper canvas ─────────────────────────────────────────── */
@@ -2304,18 +2305,18 @@ body.is-portrait .top-bar>div {
   pointer-events: auto !important;
 }
 
-/* Portrait: toast text indicator at the bottom */
+/* Portrait: toast text indicator positioned slightly lower from top */
 .is-portrait .toast,
 body.is-portrait .toast {
   position: absolute;
-  top: auto;
-  bottom: calc(max(env(safe-area-inset-bottom, 0px), 0px) + 48px);
+  top: calc(max(env(safe-area-inset-top, 0px), 0px) + 76px);
+  bottom: auto;
   left: 50%;
   right: auto;
   transform: translateX(-50%);
   max-width: min(440px, 90vw);
   text-align: center;
-  z-index: 65;
+  z-index: 100;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────────

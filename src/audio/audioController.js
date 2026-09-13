@@ -174,12 +174,13 @@ export async function loadPositionalAudio(rawUrl, token, resolveMediaUrlFn) {
   audioEl.addEventListener('playing', () => {
     arState.isAudioReady = true;
   });
-  audioEl.addEventListener('error', (e) => {
-    console.warn('[Audio] Direct stream error, trying proxy URL:', e);
-    if (token === arState.audioLoadToken && !resolvedAudioUrl.includes('corsproxy.io')) {
-      const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(resolvedAudioUrl)}`;
-      audioEl.src = proxyUrl;
-      audioEl.load();
-    }
-  });
+  const onError = (e) => {
+    if (token !== arState.audioLoadToken) return;
+    console.warn('[Audio] Audio stream unavailable or failed to load:', e);
+    arState.isAudioReady = false;
+    audioEl.removeEventListener('error', onError);
+  };
+
+  audioEl.addEventListener('error', onError, { once: true });
 }
+

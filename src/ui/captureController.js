@@ -80,7 +80,7 @@ export async function executeCaptureFrame(frame) {
       arState.captureRenderTarget = new THREE.WebGLRenderTarget(W, H, {
         format: THREE.RGBAFormat,
         type: THREE.UnsignedByteType,
-        colorSpace: THREE.SRGBColorSpace
+        colorSpace: THREE.NoColorSpace
       });
     }
 
@@ -215,10 +215,31 @@ export async function executeCaptureFrame(frame) {
         await ensureVideoFrameReady(cameraVideo, 500);
       }
 
-      // Draw camera video feed covering entire screen (object-fit: cover)
-      if (cameraVideo && cameraVideo.videoWidth > 0 && cameraVideo.videoHeight > 0) {
-        const vw = cameraVideo.videoWidth;
-        const vh = cameraVideo.videoHeight;
+      // Draw camera feed covering entire screen (object-fit: cover)
+      let cameraSource = cameraVideo;
+      let imageBitmap = null;
+
+      // 1. Attempt hardware ImageCapture for native ISP color curves (avoids Chrome flat YUV video bug)
+      const stream = arState.cameraStream || (cameraVideo.srcObject instanceof MediaStream ? cameraVideo.srcObject : null) || tempStream;
+      if (stream && typeof ImageCapture !== 'undefined') {
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack && videoTrack.readyState === 'live') {
+          try {
+            const imageCapture = new ImageCapture(videoTrack);
+            imageBitmap = await imageCapture.grabFrame();
+            if (imageBitmap && imageBitmap.width > 0 && imageBitmap.height > 0) {
+              cameraSource = imageBitmap;
+            }
+          } catch (icErr) {
+            console.warn('[Capture] ImageCapture grabFrame fallback to video element:', icErr);
+          }
+        }
+      }
+
+      const vw = cameraSource.videoWidth || cameraSource.width || 0;
+      const vh = cameraSource.videoHeight || cameraSource.height || 0;
+
+      if (vw > 0 && vh > 0) {
         const videoRatio = vw / vh;
         const screenRatio = W / H;
         let sx = 0, sy = 0, sw = vw, sh = vh;
@@ -229,27 +250,42 @@ export async function executeCaptureFrame(frame) {
           sh = vw / screenRatio;
           sy = (vh - sh) / 2;
         }
-        ctx.drawImage(cameraVideo, sx, sy, sw, sh, 0, 0, W, H);
+
+        // Apply contrast and color curve correction to counteract Android Chrome's washed-out flat YUV bug.
+        // This expands the dynamic range, restores deep true blacks, and removes the white hazy "log" look.
+        ctx.save();
+        ctx.filter = 'contrast(1.18) saturate(1.16) brightness(0.96)';
+        ctx.drawImage(cameraSource, sx, sy, sw, sh, 0, 0, W, H);
+        ctx.restore();
       }
 
-      // Draw transparent 3D scene (dancer) on top of camera surroundings
+      if (imageBitmap && typeof imageBitmap.close === 'function') {
+        imageBitmap.close();
+      }
+
+      // Draw transparent 3D scene (dancer) on top of camera surroundings with rich, vibrant festival colors
+      ctx.save();
+      ctx.filter = 'contrast(1.08) saturate(1.22)';
       ctx.drawImage(dancerCanvas, 0, 0, W, H);
+      ctx.restore();
 
       if (tempStream) {
         tempStream.getTracks().forEach((t) => t.stop());
       }
     }
 
-    // 6. Add festive Bacolod watermark ribbon/badge
-    const badgeH = Math.round(52 * (W / 720));
+    // 6. Festive Bacolod watermark text (no background box, crisp opaque text with drop shadow)
     const fontSize = Math.round(18 * (W / 720));
-    ctx.fillStyle = 'rgba(15, 15, 20, 0.65)';
-    ctx.fillRect(0, H - badgeH, W, badgeH);
-
-    ctx.fillStyle = '#fbb03b';
+    ctx.save();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+    ctx.shadowBlur = Math.round(5 * (W / 720));
+    ctx.shadowOffsetX = Math.round(1.5 * (W / 720));
+    ctx.shadowOffsetY = Math.round(1.5 * (W / 720));
+    ctx.fillStyle = '#ffbe3b';
     ctx.font = `bold ${Math.max(fontSize, 14)}px "Plus Jakarta Sans", "Baloo 2", sans-serif`;
     ctx.textBaseline = 'middle';
-    ctx.fillText('Bacolod Tourism AR · City of Smiles', Math.round(20 * (W / 720)), H - badgeH / 2);
+    ctx.fillText('Bacolod Tourism AR · City of Smiles', Math.round(24 * (W / 720)), H - Math.round(30 * (W / 720)));
+    ctx.restore();
 
     outCanvas.toBlob((blob) => {
       if (blob) {
@@ -286,34 +322,19 @@ export function triggerShutterFlash() {
   });
 }
 
-export async function handleSaveOrSharePhoto(blob, filename = 'bacolod-tourism-ar.jpg') {
-  const file = new File([blob], filename, { type: 'image/jpeg' });
+export async function handleSaveOrSharePhoto(blob, filename = null) {
+  // Direct save/download to device without opening Web Share dialog
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const actualFilename = filename || `bacolod-tourism-ar-${timestamp}.jpg`;
 
-  // 1. Try Native Web Share API
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try {
-      await navigator.share({
-        files: [file],
-        title: 'Bacolod Tourism AR Photo',
-        text: 'Exploring Bacolod in Augmented Reality!'
-      });
-      return;
-    } catch (shareErr) {
-      if (shareErr.name !== 'AbortError') {
-        console.warn('Web Share failed, fallback to direct download:', shareErr);
-      }
-    }
-  }
-
-  // 2. Direct browser download fallback
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = filename;
+  a.download = actualFilename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
 export function setupCapture() {

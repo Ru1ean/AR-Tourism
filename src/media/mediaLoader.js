@@ -179,12 +179,6 @@ export function parseMediaAndAudioFromQr(text) {
   let videoSource = cleanUrl;
   let audioSource = null;
 
-  // If a File Garden folder URL is passed without a specific filename, link to the media & companion audio inside it
-  if (cleanUrl.includes('file.garden') && !/\.(mp4|webm|mov|ogg|m4v|glb|gltf|jpg|jpeg|png|webp|gif|mp3|wav|m4a|aac)($|[?#])/i.test(cleanUrl)) {
-    videoSource = `${cleanUrl}/Composition_greybg.mp4`;
-    audioSource = `${cleanUrl}/audioclip-1788760841000-245087.mp4`;
-  }
-
   // If video is an MP4/video file and no separate audio URL was supplied,
   // feed the video file itself to spatial audio so embedded sound plays with 3D audio!
   if (!audioSource && /\.(mp4|webm|mov|m4v)($|[?#])/i.test(videoSource)) {
@@ -302,8 +296,12 @@ export async function loadVideoViaBlob(url, loadToken) {
     const blob = await response.blob();
     if (loadToken !== arState.mediaLoadToken || arState.isMediaReady) return;
 
-    if (blob.type && (blob.type.startsWith('text/') || blob.type.startsWith('application/json'))) {
-      throw new Error(`Unexpected media type: ${blob.type}`);
+    if (blob.type && (blob.type.includes('zip') || blob.type.includes('compressed'))) {
+      throw new Error('This link is a folder/ZIP archive. Please provide a direct link to the .mp4 video file.');
+    }
+
+    if (blob.type && (blob.type.startsWith('text/') || blob.type.startsWith('application/json') || blob.type.includes('html'))) {
+      throw new Error(`Unexpected media type (${blob.type}). Please provide a direct link to the media file.`);
     }
 
     updateLoadingBar(85, true);
@@ -313,6 +311,8 @@ export async function loadVideoViaBlob(url, loadToken) {
   } catch (err) {
     if (loadToken !== arState.mediaLoadToken || arState.isMediaReady) return;
     console.warn('Video blob fallback failed:', err);
+    hideLoadingBar();
+    setToast(err.message || 'Could not load media. Please ensure the link points directly to a file.', true);
   }
 }
 
@@ -324,9 +324,11 @@ export function loadVideoMedia(url, loadToken, { allowBlobFallback = true } = {}
   updateCircularProgress(20, 'Buffering media…');
 
   let progressInterval = null;
+  let watchdogTimeout = null;
 
   const cleanup = () => {
     if (progressInterval) clearInterval(progressInterval);
+    if (watchdogTimeout) clearTimeout(watchdogTimeout);
     video.removeEventListener('loadedmetadata', onMetadata);
     video.removeEventListener('loadeddata', onLoadedData);
     video.removeEventListener('canplay', checkBufferComplete);
@@ -440,6 +442,15 @@ export function loadVideoMedia(url, loadToken, { allowBlobFallback = true } = {}
   setTimeout(checkBufferComplete, 80);
   setTimeout(checkBufferComplete, 250);
   setTimeout(checkBufferComplete, 600);
+
+  // Safety watchdog: unlock buffer page after 4 seconds even if browser video decode event lags
+  watchdogTimeout = setTimeout(() => {
+    if (loadToken !== arState.mediaLoadToken || arState.isMediaReady) return;
+    console.warn('[MediaLoader] Watchdog timeout reached, unblocking buffer screen');
+    cleanup();
+    updateCircularProgress(100, 'Ready!');
+    markVideoReady(loadToken);
+  }, 4000);
 }
 
 export async function tryLoadGif(urlOrBuffer, loadToken = ++arState.mediaLoadToken) {
@@ -473,7 +484,7 @@ export async function tryLoadGif(urlOrBuffer, loadToken = ++arState.mediaLoadTok
     } catch (err) {
       console.warn("Failed to fetch GIF buffer directly:", err);
       try {
-        const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(urlOrBuffer);
+        const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(urlOrBuffer);
         buffer = await fetch(proxyUrl).then(res => res.arrayBuffer());
       } catch (proxyErr) {
         console.error("GIF buffer fetch failed entirely:", proxyErr);
@@ -534,23 +545,16 @@ export async function tryLoadGlb(urlOrBuffer, loadToken = ++arState.mediaLoadTok
     } catch (err) {
       console.warn("Direct GLB fetch failed, trying proxy:", err);
       try {
-        const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(urlOrBuffer);
+        const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(urlOrBuffer);
         const res = await fetch(proxyUrl);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         buffer = await res.arrayBuffer();
       } catch (proxyErr) {
-        try {
-          const backupProxy = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(urlOrBuffer);
-          const res = await fetch(backupProxy);
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          buffer = await res.arrayBuffer();
-        } catch (backupErr) {
-          console.error("All GLB fetch attempts failed:", backupErr);
-          setToast("Failed to load 3D model.");
-          hideLoadingBar();
-          setMediaReady(true);
-          return;
-        }
+        console.error("All GLB fetch attempts failed:", proxyErr);
+        setToast("Failed to load 3D model.");
+        hideLoadingBar();
+        setMediaReady(true);
+        return;
       }
     }
   } else {
@@ -653,10 +657,13 @@ export function tryLoadImage(url, loadToken = ++arState.mediaLoadToken) {
   );
 }
 
-export async function loadMediaFromQR(text) {
+export async function loadMediaFromQR(text, customAudio = null) {
   if (!text) return;
 
-  const { videoSource, audioSource } = parseMediaAndAudioFromQr(text);
+  let { videoSource, audioSource } = parseMediaAndAudioFromQr(text);
+  if (customAudio) {
+    audioSource = customAudio;
+  }
   console.log('[QR Media] Video Source:', videoSource, '| Audio Source:', audioSource);
 
   stopPositionalAudio();
