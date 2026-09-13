@@ -367,7 +367,7 @@ export function placeDancer(customToast = 'MassKara Dancer placed in front of yo
     resumeAudioContext();
     if (audioEl) {
       if (arState.isAudioReady && !arState.isAudioMuted) {
-        audioEl.play().catch(() => {});
+        audioEl.play().catch(() => { });
       }
     }
 
